@@ -628,58 +628,70 @@
                 });
         };
 
-        Kiosko.onScanExito = function (decodedText) {
-            var ahora = Date.now();
-            if (decodedText === Kiosko.ultimaCedula && (ahora - Kiosko.ultimaCedulaTime) < 4000) return;
-            Kiosko.ultimaCedula = decodedText;
-            Kiosko.ultimaCedulaTime = ahora;
+        Kiosko.onScanExito = function(decodedText) {
+  var ahora = Date.now();
+  if (decodedText === Kiosko.ultimaCedula && (ahora - Kiosko.ultimaCedulaTime) < 4000) return;
+  Kiosko.ultimaCedula = decodedText;
+  Kiosko.ultimaCedulaTime = ahora;
 
-            Kiosko.beep(true);
-            Kiosko.vibrar([100]);
+  // 🛑 PAUSAR el scanner inmediatamente para evitar lecturas múltiples
+  if (Kiosko.scanner && Kiosko.scanner.pause) {
+    try { Kiosko.scanner.pause(true); } catch (e) {}
+  }
 
-            Kiosko.api('comedorRegistrar', [decodedText, 'KIOSKO'])
-                .then(Kiosko.mostrarResultado)
-                .catch(function (err) {
-                    Kiosko.mostrarResultado({ ok: false, mensaje: 'Error de red: ' + err.message });
-                });
-        };
+  Kiosko.beep(true);
+  Kiosko.vibrar([100]);
 
-        Kiosko.mostrarResultado = function (res) {
-            var card = document.getElementById('overlayCard');
-            var icon = document.getElementById('overlayIcon');
-            var titulo = document.getElementById('overlayTitulo');
-            var msg = document.getElementById('overlayMsg');
-            var tag = document.getElementById('overlayTag');
-            var meta = document.getElementById('overlayMeta');
+  Kiosko.api('comedorRegistrar', [decodedText, 'KIOSKO'])
+    .then(Kiosko.mostrarResultado)
+    .catch(function(err) {
+      Kiosko.mostrarResultado({ ok: false, mensaje: 'Error de red: ' + err.message });
+    });
+};
 
-            if (res && res.ok) {
-                var d = res.data;
-                card.className = 'overlay-card ok';
-                icon.textContent = '✓';
-                titulo.textContent = d.nombre;
-                msg.textContent = d.seccion + ' · ' + d.nivel;
-                tag.style.display = 'inline-block';
-                tag.textContent = d.tipo === 'Beca' ? '★ BECA' : '◆ TIQUETE';
-                meta.textContent = '✓ Registrado a las ' + d.hora;
-            } else {
-                var esDuplicado = res && res.data && res.data.duplicado;
-                card.className = esDuplicado ? 'overlay-card warn' : 'overlay-card err';
-                icon.textContent = esDuplicado ? '⊘' : '✗';
-                titulo.textContent = esDuplicado ? 'Ya registrado' : 'No válido';
-                msg.textContent = (res && res.mensaje) || 'Error desconocido';
-                tag.style.display = 'none';
-                meta.textContent = '';
-                Kiosko.beep(false);
-                Kiosko.vibrar([100, 50, 100]);
-            }
+        Kiosko.mostrarResultado = function(res) {
+  var card = document.getElementById('overlayCard');
+  var icon = document.getElementById('overlayIcon');
+  var titulo = document.getElementById('overlayTitulo');
+  var msg = document.getElementById('overlayMsg');
+  var tag = document.getElementById('overlayTag');
+  var meta = document.getElementById('overlayMeta');
 
-            document.getElementById('overlay').classList.add('activo');
-            setTimeout(function () {
-                document.getElementById('overlay').classList.remove('activo');
-            }, 3000);
+  if (res && res.ok) {
+    var d = res.data;
+    card.className = 'overlay-card ok';
+    icon.textContent = '✓';
+    titulo.textContent = d.nombre;
+    msg.textContent = d.seccion + ' · ' + d.nivel;
+    tag.style.display = 'inline-block';
+    tag.textContent = d.tipo === 'Beca' ? '★ BECA' : '◆ TIQUETE';
+    meta.textContent = '✓ Registrado a las ' + d.hora;
+  } else {
+    var esDuplicado = res && res.data && res.data.duplicado;
+    card.className = esDuplicado ? 'overlay-card warn' : 'overlay-card err';
+    icon.textContent = esDuplicado ? '⊘' : '✗';
+    titulo.textContent = esDuplicado ? 'Ya registrado' : 'No válido';
+    msg.textContent = (res && res.mensaje) || 'Error desconocido';
+    tag.style.display = 'none';
+    meta.textContent = '';
+    Kiosko.beep(false);
+    Kiosko.vibrar([100, 50, 100]);
+  }
 
-            Kiosko.refrescarStats();
-        };
+  document.getElementById('overlay').classList.add('activo');
+
+  // ⏱ Auto-cerrar y REANUDAR el scanner
+  setTimeout(function() {
+    document.getElementById('overlay').classList.remove('activo');
+    
+    // ▶️ REANUDAR el scanner para el siguiente estudiante
+    if (Kiosko.scanner && Kiosko.scanner.resume) {
+      try { Kiosko.scanner.resume(); } catch (e) {}
+    }
+  }, 3000);
+
+  Kiosko.refrescarStats();
+};
 
         Kiosko.refrescarStats = function () {
             Kiosko.api('comedorStats', [null]).then(function (res) {
