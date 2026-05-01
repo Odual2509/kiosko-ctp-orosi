@@ -1,0 +1,745 @@
+<!DOCTYPE html>
+<html lang="es">
+
+<head>
+    <base target="_top">
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+    <meta name="theme-color" content="#0a0a0a">
+    <title>Kiosko Comedor - CTP Orosi</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;900&display=swap" rel="stylesheet">
+    <script src="https://cdn.jsdelivr.net/npm/html5-qrcode@2.3.10/html5-qrcode.min.js"></script>
+    <style>
+        /* === MISMOS ESTILOS QUE TENÍAS EN Kiosko.html === */
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        html,
+        body {
+            height: 100%;
+            width: 100%;
+            overflow: hidden;
+            font-family: 'Inter', -apple-system, sans-serif;
+            background: #0a0a0a;
+            color: white;
+            user-select: none;
+            -webkit-tap-highlight-color: transparent;
+        }
+
+        .kiosko-wrapper {
+            height: 100vh;
+            display: flex;
+            flex-direction: column;
+            background: linear-gradient(180deg, #0a0a0a 0%, #111827 100%);
+        }
+
+        .topbar {
+            padding: 16px 24px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+            flex-shrink: 0;
+        }
+
+        .topbar .titulo {
+            font-weight: 900;
+            font-size: 18px;
+            letter-spacing: -0.3px;
+        }
+
+        .topbar .titulo .accent {
+            color: #3b82f6;
+        }
+
+        .topbar .estado {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-size: 12px;
+            color: #94a3b8;
+        }
+
+        .estado-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: #16a34a;
+            animation: pulse 1.5s infinite;
+        }
+
+        @keyframes pulse {
+
+            0%,
+            100% {
+                opacity: 1;
+            }
+
+            50% {
+                opacity: 0.4;
+            }
+        }
+
+        .main {
+            flex: 1;
+            display: grid;
+            grid-template-columns: 1fr 380px;
+            gap: 16px;
+            padding: 16px;
+            min-height: 0;
+        }
+
+        @media (max-width: 900px) {
+            .main {
+                grid-template-columns: 1fr;
+                grid-template-rows: 1fr auto;
+            }
+        }
+
+        .camara-zona {
+            background: #000;
+            border-radius: 16px;
+            overflow: hidden;
+            position: relative;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        #qr-reader {
+            width: 100% !important;
+            height: 100% !important;
+        }
+
+        #qr-reader video {
+            width: 100% !important;
+            height: 100% !important;
+            object-fit: cover !important;
+        }
+
+        #qr-reader__dashboard,
+        #qr-reader__header_message,
+        #qr-reader__camera_selection {
+            display: none !important;
+        }
+
+        #qr-reader__scan_region {
+            background: transparent !important;
+            border: 0 !important;
+        }
+
+        #qr-reader__scan_region img {
+            display: none !important;
+        }
+
+        .scan-marco {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            width: 280px;
+            height: 280px;
+            border: 3px solid #3b82f6;
+            border-radius: 24px;
+            pointer-events: none;
+            z-index: 10;
+            box-shadow: 0 0 0 9999px rgba(0, 0, 0, 0.55);
+        }
+
+        .scan-marco::before,
+        .scan-marco::after {
+            content: '';
+            position: absolute;
+            width: 40px;
+            height: 40px;
+            border: 4px solid #fbbf24;
+        }
+
+        .scan-marco::before {
+            top: -3px;
+            left: -3px;
+            border-right: 0;
+            border-bottom: 0;
+            border-radius: 22px 0 0 0;
+        }
+
+        .scan-marco::after {
+            bottom: -3px;
+            right: -3px;
+            border-left: 0;
+            border-top: 0;
+            border-radius: 0 0 22px 0;
+        }
+
+        .scan-line {
+            position: absolute;
+            left: 0;
+            right: 0;
+            top: 0;
+            height: 2px;
+            background: linear-gradient(90deg, transparent, #3b82f6, transparent);
+            animation: scanline 2s linear infinite;
+        }
+
+        @keyframes scanline {
+            0% {
+                top: 0;
+            }
+
+            50% {
+                top: 100%;
+            }
+
+            100% {
+                top: 0;
+            }
+        }
+
+        .scan-msg {
+            position: absolute;
+            bottom: 30px;
+            left: 50%;
+            transform: translateX(-50%);
+            z-index: 10;
+            background: rgba(0, 0, 0, 0.7);
+            color: white;
+            padding: 10px 20px;
+            border-radius: 30px;
+            font-size: 14px;
+            font-weight: 600;
+            letter-spacing: 0.5px;
+        }
+
+        .panel {
+            display: flex;
+            flex-direction: column;
+            gap: 16px;
+            min-height: 0;
+        }
+
+        .stat-card {
+            background: rgba(255, 255, 255, 0.04);
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            border-radius: 14px;
+            padding: 16px;
+        }
+
+        .stat-card .titulo {
+            font-size: 11px;
+            color: #94a3b8;
+            letter-spacing: 1px;
+            text-transform: uppercase;
+            margin-bottom: 8px;
+        }
+
+        .stat-card .num {
+            font-size: 36px;
+            font-weight: 900;
+            line-height: 1;
+        }
+
+        .stat-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 8px;
+        }
+
+        .stat-mini {
+            background: rgba(255, 255, 255, 0.04);
+            border-radius: 10px;
+            padding: 10px;
+            text-align: center;
+        }
+
+        .stat-mini .num {
+            font-size: 22px;
+            font-weight: 800;
+        }
+
+        .stat-mini .lbl {
+            font-size: 10px;
+            color: #94a3b8;
+            text-transform: uppercase;
+        }
+
+        .stat-mini.beca .num {
+            color: #22c55e;
+        }
+
+        .stat-mini.tiq .num {
+            color: #f59e0b;
+        }
+
+        .ultimos {
+            flex: 1;
+            min-height: 0;
+            display: flex;
+            flex-direction: column;
+        }
+
+        .ultimos h3 {
+            font-size: 11px;
+            color: #94a3b8;
+            letter-spacing: 1px;
+            text-transform: uppercase;
+            margin-bottom: 10px;
+        }
+
+        .ultimos-list {
+            flex: 1;
+            overflow-y: auto;
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+        }
+
+        .ultimo-item {
+            background: rgba(255, 255, 255, 0.04);
+            border-left: 3px solid #3b82f6;
+            padding: 10px 12px;
+            border-radius: 8px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .ultimo-item.beca {
+            border-left-color: #22c55e;
+        }
+
+        .ultimo-item.tiquete {
+            border-left-color: #f59e0b;
+        }
+
+        .ultimo-item .nom {
+            font-weight: 600;
+            font-size: 13px;
+            line-height: 1.2;
+        }
+
+        .ultimo-item .meta {
+            font-size: 11px;
+            color: #94a3b8;
+        }
+
+        .ultimo-item .hora {
+            font-family: Consolas, monospace;
+            font-size: 11px;
+            color: #94a3b8;
+        }
+
+        .overlay {
+            position: fixed;
+            inset: 0;
+            z-index: 1000;
+            display: none;
+            align-items: center;
+            justify-content: center;
+            background: rgba(0, 0, 0, 0.6);
+            animation: fadein 0.2s ease;
+        }
+
+        .overlay.activo {
+            display: flex;
+        }
+
+        .overlay-card {
+            background: linear-gradient(135deg, var(--c1), var(--c2));
+            width: min(90%, 500px);
+            border-radius: 24px;
+            padding: 40px 30px;
+            text-align: center;
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
+            animation: scalein 0.3s cubic-bezier(.4, 1.5, .6, 1);
+        }
+
+        .overlay-card.ok {
+            --c1: #16a34a;
+            --c2: #14532d;
+        }
+
+        .overlay-card.err {
+            --c1: #dc2626;
+            --c2: #7f1d1d;
+        }
+
+        .overlay-card.warn {
+            --c1: #94a3b8;
+            --c2: #475569;
+        }
+
+        .overlay-icon {
+            font-size: 80px;
+            margin-bottom: 16px;
+            animation: bounce 0.5s ease;
+        }
+
+        @keyframes bounce {
+
+            0%,
+            60% {
+                transform: scale(0);
+            }
+
+            80% {
+                transform: scale(1.2);
+            }
+
+            100% {
+                transform: scale(1);
+            }
+        }
+
+        .overlay-titulo {
+            font-size: 36px;
+            font-weight: 900;
+            margin-bottom: 8px;
+            letter-spacing: -1px;
+            line-height: 1.1;
+        }
+
+        .overlay-msg {
+            font-size: 18px;
+            opacity: 0.95;
+            margin-bottom: 16px;
+        }
+
+        .overlay-tag {
+            display: inline-block;
+            background: rgba(0, 0, 0, 0.3);
+            padding: 8px 20px;
+            border-radius: 30px;
+            font-weight: 700;
+            font-size: 16px;
+            letter-spacing: 1px;
+        }
+
+        .overlay-meta {
+            margin-top: 16px;
+            font-size: 13px;
+            opacity: 0.8;
+        }
+
+        @keyframes fadein {
+            from {
+                opacity: 0;
+            }
+
+            to {
+                opacity: 1;
+            }
+        }
+
+        @keyframes scalein {
+            from {
+                transform: scale(0.8);
+                opacity: 0;
+            }
+
+            to {
+                transform: scale(1);
+                opacity: 1;
+            }
+        }
+
+        .inicio {
+            position: absolute;
+            inset: 0;
+            z-index: 100;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background: #0a0a0a;
+        }
+
+        .inicio-card {
+            text-align: center;
+            padding: 40px;
+        }
+
+        .inicio-card h2 {
+            font-size: 28px;
+            font-weight: 900;
+            margin-bottom: 8px;
+        }
+
+        .inicio-card p {
+            color: #94a3b8;
+            margin-bottom: 24px;
+        }
+
+        .btn-iniciar {
+            background: linear-gradient(135deg, #3b82f6, #1e40af);
+            color: white;
+            border: 0;
+            padding: 16px 40px;
+            font-size: 18px;
+            font-weight: 700;
+            border-radius: 14px;
+            cursor: pointer;
+            transition: transform 0.15s;
+        }
+
+        .btn-iniciar:active {
+            transform: scale(0.96);
+        }
+    </style>
+</head>
+
+<body>
+
+    <div class="kiosko-wrapper">
+        <div class="topbar">
+            <div class="titulo"><span class="accent">●</span> CTP Orosi · Kiosko Comedor</div>
+            <div class="estado">
+                <span class="estado-dot"></span>
+                <span id="estadoTexto">Activo</span>
+                <span style="margin-left:12px" id="fechaActual"></span>
+            </div>
+        </div>
+
+        <div class="main">
+            <div class="camara-zona">
+                <div class="inicio" id="inicioPanel">
+                    <div class="inicio-card">
+                        <h2>📷 Listo para escanear</h2>
+                        <p>Presione "Iniciar" para activar la cámara<br>y comenzar a registrar estudiantes.</p>
+                        <button class="btn-iniciar" onclick="Kiosko.iniciar()">Iniciar Kiosko</button>
+                    </div>
+                </div>
+                <div id="qr-reader" style="width:100%;height:100%"></div>
+                <div class="scan-marco" id="scanMarco" style="display:none">
+                    <div class="scan-line"></div>
+                </div>
+                <div class="scan-msg" id="scanMsg" style="display:none">
+                    Coloque el carné dentro del marco
+                </div>
+            </div>
+
+            <div class="panel">
+                <div class="stat-card">
+                    <div class="titulo">Total servidos hoy</div>
+                    <div class="num" id="kStatTotal">0</div>
+                </div>
+                <div class="stat-grid">
+                    <div class="stat-mini beca">
+                        <div class="num" id="kStatBeca">0</div>
+                        <div class="lbl">Becados</div>
+                    </div>
+                    <div class="stat-mini tiq">
+                        <div class="num" id="kStatTiq">0</div>
+                        <div class="lbl">Tiquetes</div>
+                    </div>
+                </div>
+                <div class="ultimos stat-card">
+                    <h3>Últimos 8 registros</h3>
+                    <div class="ultimos-list" id="ultimosList">
+                        <div style="text-align:center;color:#64748b;padding:20px;font-size:13px">Sin registros aún</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="overlay" id="overlay">
+        <div class="overlay-card" id="overlayCard">
+            <div class="overlay-icon" id="overlayIcon">✓</div>
+            <div class="overlay-titulo" id="overlayTitulo">—</div>
+            <div class="overlay-msg" id="overlayMsg">—</div>
+            <div class="overlay-tag" id="overlayTag" style="display:none">—</div>
+            <div class="overlay-meta" id="overlayMeta">—</div>
+        </div>
+    </div>
+
+    <script>
+        // ============================================================
+        // CONFIGURACIÓN — CAMBIA ESTOS DOS VALORES SI HACE FALTA
+        // ============================================================
+        var BACKEND_URL = 'https://script.google.com/macros/s/AKfycbyH3FrNZdeEpyQky_mkOfXA0Imfvw1xTXRgD-2jOj7A-SpzEGyy8jP00Xgtf2AoHQA/exec';
+        var KIOSKO_CLAVE = 'ctp2026';
+
+        var Kiosko = {
+            scanner: null, ultimaCedula: '', ultimaCedulaTime: 0, audioCtx: null
+        };
+
+        // ============ LLAMADAS AL BACKEND VIA FETCH ============
+        Kiosko.api = function (fn, args) {
+            return fetch(BACKEND_URL, {
+                method: 'POST',
+                body: JSON.stringify({ clave: KIOSKO_CLAVE, fn: fn, args: args || [] })
+                // sin headers Content-Type para evitar preflight CORS
+            }).then(function (r) { return r.json(); });
+        };
+
+        // ============ INIT ============
+        Kiosko.actualizarFecha = function () {
+            var d = new Date();
+            var f = d.toLocaleDateString('es-CR', { weekday: 'long', day: 'numeric', month: 'long' });
+            var h = d.toLocaleTimeString('es-CR', { hour: '2-digit', minute: '2-digit' });
+            document.getElementById('fechaActual').textContent = f + ' · ' + h;
+        };
+
+        Kiosko.iniciar = function () {
+            // 0. PRE-CHECK: ¿la librería QR se cargó?
+            if (typeof Html5Qrcode === 'undefined') {
+                alert('❌ La librería de lectura QR no se cargó.\n\n' +
+                    'Posibles causas:\n' +
+                    '• Sin conexión a Internet\n' +
+                    '• Firewall bloqueando cdn.jsdelivr.net\n' +
+                    '• Antivirus bloqueando scripts externos\n\n' +
+                    'Solución: revisa tu conexión y recarga la página (F5).');
+                return;
+            }
+
+            document.getElementById('inicioPanel').style.display = 'none';
+            document.getElementById('scanMarco').style.display = 'block';
+            document.getElementById('scanMsg').style.display = 'block';
+
+            if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+                alert('❌ Tu navegador no soporta cámara.');
+                document.getElementById('inicioPanel').style.display = 'flex';
+                return;
+            }
+
+            navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } })
+                .then(function (stream) {
+                    stream.getTracks().forEach(function (t) { t.stop(); });
+                    Kiosko.scanner = new Html5Qrcode("qr-reader");
+                    Kiosko.scanner.start(
+                        { facingMode: "environment" },
+                        { fps: 10, qrbox: { width: 250, height: 250 }, aspectRatio: 1.777 },
+                        Kiosko.onScanExito,
+                        function () { }
+                    ).catch(function (err) {
+                        alert('❌ Error iniciando lector: ' + err.message);
+                        document.getElementById('inicioPanel').style.display = 'flex';
+                    });
+                })
+                .catch(function (err) {
+                    var msg = '❌ Cámara: ' + err.name + ' - ' + err.message;
+                    if (err.name === 'NotAllowedError') {
+                        msg = '🔒 Permiso de cámara denegado. Activa el permiso en el ícono de candado/info junto a la URL.';
+                    }
+                    alert(msg);
+                    document.getElementById('inicioPanel').style.display = 'flex';
+                });
+        };
+
+        Kiosko.onScanExito = function (decodedText) {
+            var ahora = Date.now();
+            if (decodedText === Kiosko.ultimaCedula && (ahora - Kiosko.ultimaCedulaTime) < 4000) return;
+            Kiosko.ultimaCedula = decodedText;
+            Kiosko.ultimaCedulaTime = ahora;
+
+            Kiosko.beep(true);
+            Kiosko.vibrar([100]);
+
+            Kiosko.api('comedorRegistrar', [decodedText, 'KIOSKO'])
+                .then(Kiosko.mostrarResultado)
+                .catch(function (err) {
+                    Kiosko.mostrarResultado({ ok: false, mensaje: 'Error de red: ' + err.message });
+                });
+        };
+
+        Kiosko.mostrarResultado = function (res) {
+            var card = document.getElementById('overlayCard');
+            var icon = document.getElementById('overlayIcon');
+            var titulo = document.getElementById('overlayTitulo');
+            var msg = document.getElementById('overlayMsg');
+            var tag = document.getElementById('overlayTag');
+            var meta = document.getElementById('overlayMeta');
+
+            if (res && res.ok) {
+                var d = res.data;
+                card.className = 'overlay-card ok';
+                icon.textContent = '✓';
+                titulo.textContent = d.nombre;
+                msg.textContent = d.seccion + ' · ' + d.nivel;
+                tag.style.display = 'inline-block';
+                tag.textContent = d.tipo === 'Beca' ? '★ BECA' : '◆ TIQUETE';
+                meta.textContent = '✓ Registrado a las ' + d.hora;
+            } else {
+                var esDuplicado = res && res.data && res.data.duplicado;
+                card.className = esDuplicado ? 'overlay-card warn' : 'overlay-card err';
+                icon.textContent = esDuplicado ? '⊘' : '✗';
+                titulo.textContent = esDuplicado ? 'Ya registrado' : 'No válido';
+                msg.textContent = (res && res.mensaje) || 'Error desconocido';
+                tag.style.display = 'none';
+                meta.textContent = '';
+                Kiosko.beep(false);
+                Kiosko.vibrar([100, 50, 100]);
+            }
+
+            document.getElementById('overlay').classList.add('activo');
+            setTimeout(function () {
+                document.getElementById('overlay').classList.remove('activo');
+            }, 3000);
+
+            Kiosko.refrescarStats();
+        };
+
+        Kiosko.refrescarStats = function () {
+            Kiosko.api('comedorStats', [null]).then(function (res) {
+                if (res && res.ok) {
+                    document.getElementById('kStatTotal').textContent = res.data.total;
+                    document.getElementById('kStatBeca').textContent = res.data.becados;
+                    document.getElementById('kStatTiq').textContent = res.data.tiquetes;
+                }
+            }).catch(function () { });
+
+            Kiosko.api('comedorRegistrosDia', [null]).then(function (res) {
+                if (!res || !res.ok) return;
+                var lista = document.getElementById('ultimosList');
+                var arr = (res.data || []).slice(0, 8);
+                if (arr.length === 0) {
+                    lista.innerHTML = '<div style="text-align:center;color:#64748b;padding:20px;font-size:13px">Sin registros aún</div>';
+                    return;
+                }
+                var html = '';
+                for (var i = 0; i < arr.length; i++) {
+                    var r = arr[i];
+                    var cls = r.tipo === 'Beca' ? 'beca' : r.tipo === 'Tiquete' ? 'tiquete' : '';
+                    html +=
+                        '<div class="ultimo-item ' + cls + '">' +
+                        '<div>' +
+                        '<div class="nom">' + r.nombre + '</div>' +
+                        '<div class="meta">' + r.seccion + ' · ' + (r.tipo || '') + '</div>' +
+                        '</div>' +
+                        '<div class="hora">' + r.hora + '</div>' +
+                        '</div>';
+                }
+                lista.innerHTML = html;
+            }).catch(function () { });
+        };
+
+        Kiosko.beep = function (exito) {
+            try {
+                if (!Kiosko.audioCtx) Kiosko.audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+                var ctx = Kiosko.audioCtx;
+                var osc = ctx.createOscillator();
+                var gain = ctx.createGain();
+                osc.connect(gain); gain.connect(ctx.destination);
+                osc.frequency.value = exito ? 1200 : 350;
+                osc.type = exito ? 'sine' : 'square';
+                gain.gain.setValueAtTime(0.18, ctx.currentTime);
+                gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + (exito ? 0.18 : 0.4));
+                osc.start();
+                osc.stop(ctx.currentTime + (exito ? 0.18 : 0.4));
+            } catch (e) { }
+        };
+
+        Kiosko.vibrar = function (pattern) {
+            try { if (navigator.vibrate) navigator.vibrate(pattern); } catch (e) { }
+        };
+
+        Kiosko.actualizarFecha();
+        setInterval(Kiosko.actualizarFecha, 30000);
+        Kiosko.refrescarStats();
+        setInterval(Kiosko.refrescarStats, 60000);
+    </script>
+</body>
+
+</html>
