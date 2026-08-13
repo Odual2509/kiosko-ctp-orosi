@@ -7,7 +7,7 @@
     content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover"
   >
   <meta name="theme-color" content="#0a0a0a">
-  <title>Kiosko Comedor - CTP Orosi</title>
+  <title>Kiosko CTP Orosi</title>
 
   <link
     href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;900&display=swap"
@@ -69,7 +69,35 @@
     }
 
     .topbar .titulo .accent {
-      color: #3b82f6;
+      color: var(--modo-color, #3b82f6);
+    }
+
+    .modo-toggle {
+      display: flex;
+      background: rgba(255,255,255,0.06);
+      border-radius: 10px;
+      padding: 3px;
+      gap: 3px;
+      flex-shrink: 0;
+    }
+
+    .modo-btn {
+      background: transparent;
+      border: 0;
+      color: #94a3b8;
+      font-family: inherit;
+      font-size: 12px;
+      font-weight: 700;
+      padding: 5px 12px;
+      border-radius: 7px;
+      cursor: pointer;
+      transition: background 0.15s, color 0.15s;
+      white-space: nowrap;
+    }
+
+    .modo-btn.activo {
+      background: var(--modo-color, #3b82f6);
+      color: white;
     }
 
     .topbar .estado {
@@ -188,7 +216,7 @@
       transform: translate(-50%, -50%);
       width: min(60%, 220px);
       aspect-ratio: 1;
-      border: 3px solid #3b82f6;
+      border: 3px solid var(--modo-color, #3b82f6);
       border-radius: 20px;
       pointer-events: none;
       z-index: 10;
@@ -229,7 +257,7 @@
       background: linear-gradient(
         90deg,
         transparent,
-        #3b82f6,
+        var(--modo-color, #3b82f6),
         transparent
       );
       animation: scanline 1.6s linear infinite;
@@ -591,7 +619,12 @@
     <div class="topbar">
       <div class="titulo">
         <span class="accent">●</span>
-        CTP Orosi · Comedor
+        <span id="tituloModo">CTP Orosi · Comedor</span>
+      </div>
+
+      <div class="modo-toggle">
+        <button class="modo-btn activo" id="btnModoAlim" type="button" onclick="Kiosko.cambiarModo('Alimentacion')">🍽 Comedor</button>
+        <button class="modo-btn" id="btnModoTrans" type="button" onclick="Kiosko.cambiarModo('Transporte')">🚌 Transporte</button>
       </div>
 
       <div class="estado">
@@ -703,7 +736,9 @@
      * Debe terminar en /exec.
      */
     var BACKEND_URL =
-      'https://script.google.com/macros/s/AKfycbxvlcGzs0RUIFQW6tZocNOqxhAFyVIa3NpRSb6dYqf018AVA4h9P0V9MNfiAyMtx1ka/exec';
+      'https://script.google.com/macros/s/AKfycbwkxqgvQP1RZP7r3d_rt_Ei_XaHHpsQuKSFBv_RxnEjsw0YCdZ9yOvbpdFD1cjMFzjE/exec';
+
+    var MODO_ACTUAL = 'Alimentacion'; // 'Alimentacion' | 'Transporte'
 
     var KIOSKO_CLAVE = 'orosi2026K9x';
 
@@ -998,6 +1033,25 @@
     };
 
     // ============================================================
+    // CAMBIAR MODO (COMEDOR / TRANSPORTE)
+    // ============================================================
+
+    Kiosko.cambiarModo = function(modo) {
+      if (modo === MODO_ACTUAL) return;
+      MODO_ACTUAL = modo;
+
+      var esTransporte = modo === 'Transporte';
+      var color = esTransporte ? '#8b5cf6' : '#3b82f6';
+
+      document.documentElement.style.setProperty('--modo-color', color);
+      document.getElementById('tituloModo').textContent =
+        'CTP Orosi · ' + (esTransporte ? 'Transporte' : 'Comedor');
+
+      document.getElementById('btnModoAlim').classList.toggle('activo', !esTransporte);
+      document.getElementById('btnModoTrans').classList.toggle('activo', esTransporte);
+    };
+
+    // ============================================================
     // CAMBIAR CÁMARA
     // ============================================================
 
@@ -1109,7 +1163,7 @@
 
       Kiosko.api('comedorRegistrar', [
         cedula,
-        'KIOSKO'
+        MODO_ACTUAL
       ])
         .then(function(respuesta) {
           Kiosko.mostrarResultado(respuesta);
