@@ -586,6 +586,12 @@
       transform: scale(0.96);
     }
 
+    .btn-iniciar:disabled {
+      opacity: 0.55;
+      cursor: not-allowed;
+      transform: none;
+    }
+
     /* ===== BOTÓN CAMBIAR CÁMARA ===== */
 
     .btn-flotante {
@@ -628,8 +634,8 @@
       </div>
 
       <div class="estado">
-        <span class="estado-dot" id="estadoDot"></span>
-        <span id="estadoTexto">Activo</span>
+        <span class="estado-dot procesando" id="estadoDot"></span>
+        <span id="estadoTexto">Conectando…</span>
         <span style="margin-left: 8px" id="fechaActual"></span>
       </div>
     </div>
@@ -651,10 +657,12 @@
 
             <button
               class="btn-iniciar"
+              id="btnIniciar"
               type="button"
               onclick="Kiosko.iniciar()"
+              disabled
             >
-              Iniciar Kiosko
+              Conectando…
             </button>
           </div>
         </div>
@@ -752,7 +760,8 @@
     var ANTI_REBOTE = 2500;
 
     // Tiempo máximo para esperar una respuesta del backend.
-    var TIMEOUT_API = 12000;
+    // 20 s cubre el cold start más largo (~15-20 s en primer arranque).
+    var TIMEOUT_API = 20000;
 
     // Frecuencia de actualización general del panel.
     var INTERVALO_STATS = 60000;
@@ -1172,16 +1181,25 @@
           Kiosko.mostrarResultado(respuesta);
         })
         .catch(function(error) {
+          var esTimeout =
+            error &&
+            (
+              error.name === 'AbortError' ||
+              (error.message && error.message.indexOf('tardó') !== -1)
+            );
+
           Kiosko.mostrarResultado({
             ok: false,
-            mensaje:
-              'Error de red: ' +
-              (
-                error && error.message
-                  ? error.message
-                  : String(error)
-              )
+            mensaje: esTimeout
+              ? 'El servidor tardó mucho. El registro puede haberse guardado — intente escanear de nuevo para verificar.'
+              : 'Error de red: ' + (error && error.message ? error.message : String(error))
           });
+
+          // Si fue timeout, el backend probablemente registró igual.
+          // Refrescar el panel 6 segundos después para mostrar el estado real.
+          if (esTimeout) {
+            setTimeout(Kiosko.refrescarStats, 6000);
+          }
         });
     };
 
@@ -1566,6 +1584,14 @@
       30000
     );
 
+    Kiosko.habilitarBotonIniciar = function() {
+      var btn = document.getElementById('btnIniciar');
+      if (btn) {
+        btn.disabled = false;
+        btn.textContent = 'Iniciar Kiosko';
+      }
+    };
+
     /*
      * Solo consultar si se configuró una URL real.
      */
@@ -1573,7 +1599,28 @@
       BACKEND_URL &&
       BACKEND_URL.indexOf('PEGA_AQUI') === -1
     ) {
-      Kiosko.refrescarStats();
+      /*
+       * Primera llamada al backend: calienta el script.
+       * El botón "Iniciar" se habilita cuando responde (o si falla),
+       * así el primer escaneo nunca toca cold start.
+       */
+      Kiosko.api('comedorStats', [null])
+        .then(function(respuesta) {
+          if (respuesta && respuesta.ok && respuesta.data) {
+            document.getElementById('kStatTotal').textContent =
+              respuesta.data.total || 0;
+            document.getElementById('kStatBeca').textContent =
+              respuesta.data.becados || 0;
+            document.getElementById('kStatTiq').textContent =
+              respuesta.data.tiquetes || 0;
+          }
+        })
+        .catch(function() {})
+        .then(function() {
+          // Se ejecuta siempre (éxito o error): script ya arrancó.
+          Kiosko.habilitarBotonIniciar();
+          Kiosko.setEstado('Activo');
+        });
 
       Kiosko.statsTimer = setInterval(
         Kiosko.refrescarStats,
@@ -1584,6 +1631,7 @@
         'Backend no configurado',
         'error'
       );
+      Kiosko.habilitarBotonIniciar();
     }
   </script>
 </body>
