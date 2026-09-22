@@ -137,6 +137,17 @@
       }
     }
 
+    .btn-cambiar-operador {
+      background: transparent;
+      border: 0;
+      color: #64748b;
+      font-size: 11px;
+      text-decoration: underline;
+      cursor: pointer;
+      font-family: inherit;
+      padding: 0;
+    }
+
     /* ===== MAIN ===== */
 
     .main {
@@ -615,11 +626,98 @@
     .btn-flotante.visible {
       display: flex;
     }
+
+    /* ===== OPERADOR (login por cédula) ===== */
+
+    .operador-overlay {
+      position: fixed;
+      inset: 0;
+      z-index: 200;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: #0a0a0a;
+      padding: 16px;
+    }
+
+    .operador-card {
+      width: 100%;
+      max-width: 340px;
+      text-align: center;
+    }
+
+    .operador-card h2 {
+      font-size: 20px;
+      font-weight: 900;
+      margin-bottom: 6px;
+    }
+
+    .operador-card p {
+      color: #94a3b8;
+      margin-bottom: 20px;
+      font-size: 13px;
+    }
+
+    .operador-input {
+      width: 100%;
+      background: rgba(255, 255, 255, 0.06);
+      border: 1px solid rgba(255, 255, 255, 0.15);
+      color: white;
+      font-size: 20px;
+      font-weight: 700;
+      text-align: center;
+      letter-spacing: 2px;
+      padding: 14px;
+      border-radius: 12px;
+      font-family: inherit;
+      margin-bottom: 14px;
+    }
+
+    .operador-input:focus {
+      outline: none;
+      border-color: #3b82f6;
+    }
+
+    .operador-error {
+      color: #f87171;
+      font-size: 13px;
+      min-height: 18px;
+      margin-bottom: 10px;
+    }
   </style>
 </head>
 
 <body>
   <div class="kiosko-wrapper">
+
+    <!-- OPERADOR: pantalla de bloqueo por cédula, antes que todo lo demás -->
+    <div class="operador-overlay" id="operadorOverlay">
+      <div class="operador-card">
+        <h2>🔒 Identificación de operador</h2>
+        <p>Ingrese su cédula para habilitar el modo correspondiente (Comedor o Transporte).</p>
+
+        <input
+          type="text"
+          inputmode="numeric"
+          class="operador-input"
+          id="operadorCedula"
+          placeholder="Cédula"
+          maxlength="20"
+          autocomplete="off"
+        >
+
+        <div class="operador-error" id="operadorError"></div>
+
+        <button
+          class="btn-iniciar"
+          type="button"
+          id="btnOperadorIngresar"
+          onclick="Kiosko.validarOperador()"
+        >
+          Ingresar
+        </button>
+      </div>
+    </div>
 
     <!-- HEADER -->
     <div class="topbar">
@@ -637,6 +735,7 @@
         <span class="estado-dot procesando" id="estadoDot"></span>
         <span id="estadoTexto">Conectando…</span>
         <span style="margin-left: 8px" id="fechaActual"></span>
+        <button class="btn-cambiar-operador" type="button" onclick="Kiosko.cambiarOperador()" style="margin-left: 10px">Cambiar operador</button>
       </div>
     </div>
 
@@ -749,6 +848,9 @@
     var MODO_ACTUAL = 'Alimentacion'; // 'Alimentacion' | 'Transporte'
 
     var KIOSKO_CLAVE = 'CTP_Orosi_Lector_QR_2026';
+
+    // Clave usada en localStorage para recordar al último operador validado.
+    var OPERADOR_STORAGE_KEY = 'kiosko_operador_cedula';
 
     // Tiempo durante el cual se muestra el resultado (éxito).
     var TIEMPO_OVERLAY = 800;
@@ -873,6 +975,133 @@
           }
 
           throw error;
+        });
+    };
+
+    // ============================================================
+    // OPERADOR (login por cédula, define el modo habilitado)
+    // ============================================================
+
+    Kiosko.aplicarModoOperador = function(modo) {
+      Kiosko.cambiarModo(modo);
+
+      var esTransporte = modo === 'Transporte';
+      var btnAlim = document.getElementById('btnModoAlim');
+      var btnTrans = document.getElementById('btnModoTrans');
+
+      /*
+       * El operador queda fijo en un solo modo: se oculta el botón
+       * del modo no autorizado en vez de dejarlo disponible.
+       */
+      if (btnAlim) {
+        btnAlim.style.display = esTransporte ? 'none' : 'inline-block';
+      }
+
+      if (btnTrans) {
+        btnTrans.style.display = esTransporte ? 'inline-block' : 'none';
+      }
+    };
+
+    Kiosko.ocultarOperadorOverlay = function() {
+      var overlay = document.getElementById('operadorOverlay');
+      if (overlay) {
+        overlay.style.display = 'none';
+      }
+    };
+
+    Kiosko.validarOperador = function() {
+      var input = document.getElementById('operadorCedula');
+      var errorEl = document.getElementById('operadorError');
+      var boton = document.getElementById('btnOperadorIngresar');
+      var cedula = Kiosko.normalizarCedula(input ? input.value : '');
+
+      if (errorEl) {
+        errorEl.textContent = '';
+      }
+
+      if (!cedula) {
+        if (errorEl) {
+          errorEl.textContent = 'Ingrese una cédula.';
+        }
+        return;
+      }
+
+      if (boton) {
+        boton.disabled = true;
+        boton.textContent = 'Verificando…';
+      }
+
+      Kiosko.api('kioskoValidarOperador', [cedula])
+        .then(function(respuesta) {
+          if (respuesta && respuesta.ok && respuesta.data && respuesta.data.modo) {
+            try {
+              localStorage.setItem(OPERADOR_STORAGE_KEY, cedula);
+            } catch (e) {}
+
+            Kiosko.aplicarModoOperador(respuesta.data.modo);
+            Kiosko.ocultarOperadorOverlay();
+            return;
+          }
+
+          if (errorEl) {
+            errorEl.textContent =
+              (respuesta && respuesta.mensaje) || 'Cédula no autorizada.';
+          }
+        })
+        .catch(function(error) {
+          if (errorEl) {
+            errorEl.textContent =
+              'Error de red: ' +
+              (error && error.message ? error.message : String(error));
+          }
+        })
+        .then(function() {
+          if (boton) {
+            boton.disabled = false;
+            boton.textContent = 'Ingresar';
+          }
+        });
+    };
+
+    Kiosko.cambiarOperador = function() {
+      try {
+        localStorage.removeItem(OPERADOR_STORAGE_KEY);
+      } catch (e) {}
+
+      location.reload();
+    };
+
+    /*
+     * Si ya hay un operador validado en este dispositivo (localStorage),
+     * se revalida en silencio contra el backend en vez de pedir la
+     * cédula de nuevo en cada recarga de página.
+     */
+    Kiosko.iniciarValidacionOperador = function() {
+      var cedulaGuardada = '';
+
+      try {
+        cedulaGuardada = localStorage.getItem(OPERADOR_STORAGE_KEY) || '';
+      } catch (e) {}
+
+      if (!cedulaGuardada) {
+        var input = document.getElementById('operadorCedula');
+        if (input) input.focus();
+        return;
+      }
+
+      Kiosko.api('kioskoValidarOperador', [cedulaGuardada])
+        .then(function(respuesta) {
+          if (respuesta && respuesta.ok && respuesta.data && respuesta.data.modo) {
+            Kiosko.aplicarModoOperador(respuesta.data.modo);
+            Kiosko.ocultarOperadorOverlay();
+          } else {
+            try {
+              localStorage.removeItem(OPERADOR_STORAGE_KEY);
+            } catch (e) {}
+          }
+        })
+        .catch(function() {
+          // Si falla la red, se deja el overlay visible para reintentar a mano.
         });
     };
 
@@ -1583,6 +1812,20 @@
       Kiosko.actualizarFecha,
       30000
     );
+
+    (function() {
+      var input = document.getElementById('operadorCedula');
+      if (input) {
+        input.addEventListener('keydown', function(e) {
+          if (e.key === 'Enter') {
+            e.preventDefault();
+            Kiosko.validarOperador();
+          }
+        });
+      }
+    })();
+
+    Kiosko.iniciarValidacionOperador();
 
     Kiosko.habilitarBotonIniciar = function() {
       var btn = document.getElementById('btnIniciar');
