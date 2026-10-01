@@ -148,6 +148,11 @@
       padding: 0;
     }
 
+    .pendientes-txt {
+      color: #fbbf24;
+      font-weight: 700;
+    }
+
     /* ===== MAIN ===== */
 
     .main {
@@ -684,6 +689,29 @@
       min-height: 18px;
       margin-bottom: 10px;
     }
+
+    /* ===== AVISOS DE SINCRONIZACIÓN ===== */
+
+    .aviso {
+      position: fixed;
+      top: 64px;
+      left: 50%;
+      transform: translateX(-50%);
+      z-index: 1500;
+      display: none;
+      max-width: min(92vw, 520px);
+      background: #b45309;
+      color: white;
+      padding: 10px 16px;
+      border-radius: 12px;
+      font-size: 13px;
+      font-weight: 600;
+      box-shadow: 0 10px 30px rgba(0, 0, 0, 0.4);
+    }
+
+    .aviso.visible {
+      display: block;
+    }
   </style>
 </head>
 
@@ -734,6 +762,7 @@
       <div class="estado">
         <span class="estado-dot procesando" id="estadoDot"></span>
         <span id="estadoTexto">Conectando…</span>
+        <span class="pendientes-txt" id="pendientesTxt"></span>
         <span style="margin-left: 8px" id="fechaActual"></span>
         <button class="btn-cambiar-operador" type="button" onclick="Kiosko.cambiarOperador()" style="margin-left: 10px">Cambiar operador</button>
       </div>
@@ -821,6 +850,9 @@
     </div>
   </div>
 
+  <!-- AVISO: problemas al sincronizar escaneos ya mostrados como válidos -->
+  <div class="aviso" id="aviso" role="alert" aria-live="assertive"></div>
+
   <!-- OVERLAY DE RESULTADO -->
   <div class="overlay" id="overlay">
     <div class="overlay-card" id="overlayCard">
@@ -849,8 +881,26 @@
 
     var KIOSKO_CLAVE = 'CTP_Orosi_Lector_QR_2026';
 
-    // Clave usada en localStorage para recordar al último operador validado.
+    /*
+     * Versiones anteriores recordaban al operador con esta clave. Ya no se
+     * usa (la cédula se pide siempre); solo se borra al cargar.
+     */
     var OPERADOR_STORAGE_KEY = 'kiosko_operador_cedula';
+
+    /*
+     * Escaneos ya mostrados como válidos que el servidor todavía no
+     * confirmó. Se guardan en el navegador para no perderlos si la página
+     * se recarga o se cae el internet; se reenvían solos.
+     */
+    var PENDIENTES_STORAGE_KEY = 'kiosko_pendientes_v1';
+
+    // Máximo de escaneos por envío al servidor.
+    var LOTE_MAX = 50;
+
+    // Cada cuánto se traen del servidor los registros del día (otros kioskos).
+    var INTERVALO_SYNC = 60000;
+
+    var ZONA_HORARIA = 'America/Costa_Rica';
 
     // Tiempo durante el cual se muestra el resultado (éxito).
     var TIEMPO_OVERLAY = 800;
@@ -865,7 +915,7 @@
     // 20 s cubre el cold start más largo (~15-20 s en primer arranque).
     var TIMEOUT_API = 20000;
 
-    // Frecuencia de actualización general del panel.
+    // Frecuencia de actualización general del panel (modo sin datos locales).
     var INTERVALO_STATS = 60000;
 
     var Kiosko = {
@@ -877,7 +927,23 @@
       escaneando: false,
       procesando: false,
       overlayTimer: null,
-      statsTimer: null
+      statsTimer: null,
+
+      // Validación local (se llenan cuando el operador inicia sesión)
+      operador: '',
+      datosListos: false,
+      estudiantes: null,   // cedula -> [nombre, seccion, nivel, tipo]
+      registrados: {},     // clave -> hora (clave: cédula, o "cedula|M"/"cedula|T" en Transporte)
+      fecha: '',
+      horaCorte: 12,
+      desfaseMs: 0,
+      syncTimer: null,
+
+      // Cola de envío al servidor
+      pendientes: [],
+      enviando: false,
+      reintentoMs: 2000,
+      avisoTimer: null
     };
 
     // ============================================================
@@ -912,6 +978,22 @@
       return String(valor == null ? '' : valor)
         .trim()
         .replace(/\D/g, '');
+    };
+
+    Kiosko.avisar = function(texto) {
+      var el = document.getElementById('aviso');
+      if (!el) return;
+
+      el.textContent = texto;
+      el.classList.add('visible');
+
+      if (Kiosko.avisoTimer) {
+        clearTimeout(Kiosko.avisoTimer);
+      }
+
+      Kiosko.avisoTimer = setTimeout(function() {
+        el.classList.remove('visible');
+      }, 8000);
     };
 
     // ============================================================
@@ -1009,6 +1091,11 @@
       }
     };
 
+    /*
+     * La cédula se pide SIEMPRE: no se guarda en la tablet, así cualquiera
+     * que llegue al kiosko tiene que identificarse. Al validar, el servidor
+     * devuelve también los datos para decidir localmente cada escaneo.
+     */
     Kiosko.validarOperador = function() {
       var input = document.getElementById('operadorCedula');
       var errorEl = document.getElementById('operadorError');
@@ -1031,15 +1118,19 @@
         boton.textContent = 'Verificando…';
       }
 
-      Kiosko.api('kioskoValidarOperador', [cedula])
+      Kiosko.api('kioskoIniciarSesion', [cedula])
         .then(function(respuesta) {
           if (respuesta && respuesta.ok && respuesta.data && respuesta.data.modo) {
-            try {
-              localStorage.setItem(OPERADOR_STORAGE_KEY, cedula);
-            } catch (e) {}
+            Kiosko.operador = cedula;
+
+            if (input) {
+              input.value = '';
+            }
 
             Kiosko.aplicarModoOperador(respuesta.data.modo);
+            Kiosko.cargarDatos(respuesta.data);
             Kiosko.ocultarOperadorOverlay();
+            Kiosko.iniciarSesionLista();
             return;
           }
 
@@ -1064,44 +1155,416 @@
     };
 
     Kiosko.cambiarOperador = function() {
+      // Los pendientes quedan guardados y se reenvían al recargar.
+      location.reload();
+    };
+
+    Kiosko.prepararOperador = function() {
+      // Limpia el operador recordado por versiones anteriores.
       try {
         localStorage.removeItem(OPERADOR_STORAGE_KEY);
       } catch (e) {}
 
-      location.reload();
+      var input = document.getElementById('operadorCedula');
+      if (input) {
+        input.focus();
+      }
+
+      Kiosko.setEstado('Esperando operador', 'procesando');
     };
 
+    // ============================================================
+    // VALIDACIÓN LOCAL Y COLA DE ENVÍO
+    // ============================================================
     /*
-     * Si ya hay un operador validado en este dispositivo (localStorage),
-     * se revalida en silencio contra el backend en vez de pedir la
-     * cédula de nuevo en cada recarga de página.
+     * Apps Script tarda ~2-3 s en responder cualquier petición. Para que el
+     * resultado salga al instante, el kiosko decide con los datos que bajó
+     * al iniciar sesión (estudiantes activos + registros del día) y envía
+     * los escaneos al servidor en lote, en segundo plano. El servidor
+     * vuelve a verificar todo: si algo no cuadra, se avisa en pantalla.
      */
-    Kiosko.iniciarValidacionOperador = function() {
-      var cedulaGuardada = '';
+
+    // Fecha y hora "del servidor" (hora de Costa Rica), aunque el reloj o la
+    // zona horaria de la tablet estén mal.
+    Kiosko.ahoraServidor = function() {
+      var d = new Date(Date.now() + Kiosko.desfaseMs);
 
       try {
-        cedulaGuardada = localStorage.getItem(OPERADOR_STORAGE_KEY) || '';
+        var fecha = d.toLocaleDateString('en-CA', {
+          timeZone: ZONA_HORARIA,
+          year: 'numeric',
+          month: '2-digit',
+          day: '2-digit'
+        });
+
+        var hora = d.toLocaleTimeString('en-GB', {
+          timeZone: ZONA_HORARIA,
+          hour: '2-digit',
+          minute: '2-digit',
+          second: '2-digit',
+          hourCycle: 'h23'
+        });
+
+        if (/^\d{4}-\d{2}-\d{2}$/.test(fecha) && /^\d{2}:\d{2}:\d{2}$/.test(hora)) {
+          return { fecha: fecha, hora: hora };
+        }
       } catch (e) {}
 
-      if (!cedulaGuardada) {
-        var input = document.getElementById('operadorCedula');
-        if (input) input.focus();
+      function dos(n) { return (n < 10 ? '0' : '') + n; }
+
+      return {
+        fecha: d.getFullYear() + '-' + dos(d.getMonth() + 1) + '-' + dos(d.getDate()),
+        hora: dos(d.getHours()) + ':' + dos(d.getMinutes()) + ':' + dos(d.getSeconds())
+      };
+    };
+
+    Kiosko.turnoDeHora = function(hora) {
+      var h = parseInt(String(hora || '').substring(0, 2), 10);
+      if (!isFinite(h)) return 'M';
+      return h < Kiosko.horaCorte ? 'M' : 'T';
+    };
+
+    Kiosko.etiquetaTurno = function(turno) {
+      if (!turno) return '';
+      return ' (' + (turno === 'T' ? 'tarde' : 'mañana') + ')';
+    };
+
+    Kiosko.cargarDatos = function(d) {
+      if (d.estudiantes) {
+        Kiosko.estudiantes = d.estudiantes;
+      }
+
+      if (typeof d.ahora === 'number') {
+        Kiosko.desfaseMs = d.ahora - Date.now();
+      }
+
+      if (d.horaCorte) {
+        Kiosko.horaCorte = d.horaCorte;
+      }
+
+      if (d.fecha !== Kiosko.fecha) {
+        Kiosko.fecha = d.fecha;
+        Kiosko.registrados = {};
+      }
+
+      var reg = d.registrados || {};
+      for (var k in reg) {
+        if (Object.prototype.hasOwnProperty.call(reg, k)) {
+          Kiosko.registrados[k] = reg[k];
+        }
+      }
+
+      // Lo pendiente de este modo y este día también cuenta como registrado.
+      for (var i = 0; i < Kiosko.pendientes.length; i++) {
+        var p = Kiosko.pendientes[i];
+        if (p.fecha === Kiosko.fecha && p.servicio === MODO_ACTUAL && p.clave) {
+          Kiosko.registrados[p.clave] = p.hora;
+        }
+      }
+
+      Kiosko.datosListos = !!Kiosko.estudiantes;
+    };
+
+    Kiosko.iniciarSesionLista = function() {
+      if (!Kiosko.datosListos) {
+        // Backend sin datos locales: se usa el modo anterior (1 petición por escaneo).
+        Kiosko.iniciarModoServidor();
         return;
       }
 
-      Kiosko.api('kioskoValidarOperador', [cedulaGuardada])
+      Kiosko.renderStatsLocal();
+      Kiosko.renderUltimosLocal();
+      Kiosko.habilitarBotonIniciar();
+      Kiosko.setEstado('Activo');
+
+      if (Kiosko.syncTimer) {
+        clearInterval(Kiosko.syncTimer);
+      }
+
+      Kiosko.syncTimer = setInterval(Kiosko.sincronizar, INTERVALO_SYNC);
+    };
+
+    // Trae del servidor los registros del día (incluye los de otros kioskos).
+    Kiosko.sincronizar = function() {
+      if (!Kiosko.operador || !Kiosko.datosListos) return;
+
+      Kiosko.api('kioskoIniciarSesion', [Kiosko.operador, true])
         .then(function(respuesta) {
-          if (respuesta && respuesta.ok && respuesta.data && respuesta.data.modo) {
-            Kiosko.aplicarModoOperador(respuesta.data.modo);
-            Kiosko.ocultarOperadorOverlay();
-          } else {
-            try {
-              localStorage.removeItem(OPERADOR_STORAGE_KEY);
-            } catch (e) {}
+          if (!respuesta || !respuesta.ok || !respuesta.data) return;
+          Kiosko.cargarDatos(respuesta.data);
+          Kiosko.renderStatsLocal();
+          Kiosko.renderUltimosLocal();
+        })
+        .catch(function() {
+          // Sin conexión: se sigue con los datos locales.
+        });
+    };
+
+    Kiosko.refrescar = function() {
+      if (Kiosko.datosListos) {
+        Kiosko.sincronizar();
+      } else {
+        Kiosko.refrescarStats();
+      }
+    };
+
+    Kiosko.registrarLocal = function(cedula) {
+      var est = Kiosko.estudiantes[cedula];
+      var ahora = Kiosko.ahoraServidor();
+
+      // Pasó la medianoche: lo registrado localmente era de otro día.
+      if (ahora.fecha !== Kiosko.fecha) {
+        Kiosko.fecha = ahora.fecha;
+        Kiosko.registrados = {};
+      }
+
+      var esTransporte = MODO_ACTUAL === 'Transporte';
+      var turno = esTransporte ? Kiosko.turnoDeHora(ahora.hora) : '';
+      var clave = turno ? cedula + '|' + turno : cedula;
+
+      if (Kiosko.registrados[clave] !== undefined) {
+        Kiosko.mostrarResultado({
+          ok: false,
+          mensaje:
+            est[0] + ' ya fue registrado hoy en ' +
+            (esTransporte ? 'Transporte' : 'Alimentacion') +
+            Kiosko.etiquetaTurno(turno) +
+            ' a las ' + Kiosko.registrados[clave],
+          data: { duplicado: true }
+        });
+        return;
+      }
+
+      Kiosko.registrados[clave] = ahora.hora;
+
+      Kiosko.encolar({
+        id: Date.now().toString(36) + Math.random().toString(36).slice(2, 7),
+        cedula: cedula,
+        servicio: MODO_ACTUAL,
+        fecha: ahora.fecha,
+        hora: ahora.hora,
+        clave: clave,
+        nombre: est[0],
+        intentos: 0
+      });
+
+      Kiosko.beep(true);
+      Kiosko.vibrar([70]);
+
+      Kiosko.mostrarResultado({
+        ok: true,
+        data: {
+          nombre: est[0],
+          seccion: est[1],
+          nivel: est[2],
+          tipo: est[3],
+          hora: ahora.hora
+        }
+      });
+
+      Kiosko.renderStatsLocal();
+    };
+
+    Kiosko.renderStatsLocal = function() {
+      var total = 0;
+      var becados = 0;
+      var tiquetes = 0;
+
+      for (var k in Kiosko.registrados) {
+        if (!Object.prototype.hasOwnProperty.call(Kiosko.registrados, k)) continue;
+        total++;
+
+        var e = Kiosko.estudiantes ? Kiosko.estudiantes[k.split('|')[0]] : null;
+        var tipo = e ? e[3] : '';
+
+        if (tipo === 'Beca') {
+          becados++;
+        } else if (tipo === 'Tiquete') {
+          tiquetes++;
+        }
+      }
+
+      document.getElementById('kStatTotal').textContent = total;
+      document.getElementById('kStatBeca').textContent = becados;
+      document.getElementById('kStatTiq').textContent = tiquetes;
+    };
+
+    Kiosko.renderUltimosLocal = function() {
+      var lista = document.getElementById('ultimosList');
+      var items = [];
+
+      for (var k in Kiosko.registrados) {
+        if (!Object.prototype.hasOwnProperty.call(Kiosko.registrados, k)) continue;
+        var e = Kiosko.estudiantes ? Kiosko.estudiantes[k.split('|')[0]] : null;
+        items.push({
+          nombre: e ? e[0] : k.split('|')[0],
+          seccion: e ? e[1] : '',
+          tipo: e ? e[3] : '',
+          hora: String(Kiosko.registrados[k] || '')
+        });
+      }
+
+      items.sort(function(a, b) {
+        return b.hora.localeCompare(a.hora);
+      });
+
+      items = items.slice(0, 8);
+
+      if (items.length === 0) {
+        lista.innerHTML = '<div class="ultimo-vacio">Sin registros aún</div>';
+        return;
+      }
+
+      var html = '';
+
+      for (var i = 0; i < items.length; i++) {
+        var r = items[i];
+        var clase = r.tipo === 'Beca' ? 'beca' : r.tipo === 'Tiquete' ? 'tiquete' : '';
+        var meta = [];
+
+        if (r.seccion) meta.push(r.seccion);
+        if (r.tipo) meta.push(r.tipo);
+
+        html +=
+          '<div class="ultimo-item ' + clase + '">' +
+            '<div style="min-width:0;flex:1">' +
+              '<div class="nom">' + Kiosko.escapeHtml(r.nombre) + '</div>' +
+              '<div class="meta">' + Kiosko.escapeHtml(meta.join(' · ')) + '</div>' +
+            '</div>' +
+            '<div class="hora">' + Kiosko.escapeHtml(r.hora) + '</div>' +
+          '</div>';
+      }
+
+      lista.innerHTML = html;
+    };
+
+    Kiosko.cargarPendientes = function() {
+      try {
+        var raw = localStorage.getItem(PENDIENTES_STORAGE_KEY);
+        var lista = raw ? JSON.parse(raw) : [];
+        Kiosko.pendientes = Array.isArray(lista) ? lista : [];
+      } catch (e) {
+        Kiosko.pendientes = [];
+      }
+
+      Kiosko.actualizarPendientesUI();
+    };
+
+    Kiosko.guardarPendientes = function() {
+      try {
+        localStorage.setItem(PENDIENTES_STORAGE_KEY, JSON.stringify(Kiosko.pendientes));
+      } catch (e) {}
+    };
+
+    Kiosko.actualizarPendientesUI = function() {
+      var el = document.getElementById('pendientesTxt');
+      if (!el) return;
+
+      var n = Kiosko.pendientes.length;
+      el.textContent = n > 0
+        ? '· ' + n + (n === 1 ? ' pendiente de enviar' : ' pendientes de enviar')
+        : '';
+    };
+
+    Kiosko.encolar = function(item) {
+      Kiosko.pendientes.push(item);
+      Kiosko.guardarPendientes();
+      Kiosko.actualizarPendientesUI();
+      Kiosko.procesarCola();
+    };
+
+    /*
+     * Envía los pendientes en lote, de a uno a la vez. Lo que no recibe
+     * respuesta (sin internet, servidor lento) se reintenta con espera
+     * creciente; nunca se descarta sin respuesta del servidor.
+     */
+    Kiosko.procesarCola = function() {
+      if (Kiosko.enviando || Kiosko.pendientes.length === 0) return;
+
+      Kiosko.enviando = true;
+
+      var lote = Kiosko.pendientes.slice(0, LOTE_MAX);
+      var items = [];
+
+      for (var i = 0; i < lote.length; i++) {
+        items.push({
+          id: lote[i].id,
+          cedula: lote[i].cedula,
+          servicio: lote[i].servicio,
+          fecha: lote[i].fecha,
+          hora: lote[i].hora
+        });
+      }
+
+      var huboExito = false;
+
+      Kiosko.api('comedorRegistrarLote', [items])
+        .then(function(respuesta) {
+          if (!respuesta || !respuesta.ok || !Array.isArray(respuesta.data)) {
+            throw new Error((respuesta && respuesta.mensaje) || 'Respuesta inválida');
+          }
+
+          var porId = {};
+          for (var j = 0; j < respuesta.data.length; j++) {
+            porId[respuesta.data[j].id] = respuesta.data[j];
+          }
+
+          var quedan = [];
+
+          for (var k = 0; k < Kiosko.pendientes.length; k++) {
+            var p = Kiosko.pendientes[k];
+            var r = porId[p.id];
+
+            if (!r) {
+              quedan.push(p);
+              continue;
+            }
+
+            if (r.ok) continue;
+
+            if (r.duplicado) {
+              /*
+               * En el primer intento, un duplicado significa que otro
+               * kiosko lo registró antes. En reintentos es esperable: el
+               * envío anterior sí llegó aunque no recibimos la respuesta.
+               */
+              if (!p.intentos) {
+                Kiosko.avisar('⚠ ' + (p.nombre || p.cedula) + ' ya estaba registrado en otro kiosko.');
+              }
+              continue;
+            }
+
+            // Rechazado por el servidor: se quita la marca local.
+            if (p.fecha === Kiosko.fecha && Kiosko.registrados[p.clave] === p.hora) {
+              delete Kiosko.registrados[p.clave];
+            }
+
+            Kiosko.avisar('✗ ' + (p.nombre || p.cedula) + ': ' + (r.mensaje || 'rechazado') + '. NO quedó registrado.');
+          }
+
+          Kiosko.pendientes = quedan;
+          Kiosko.reintentoMs = 2000;
+          huboExito = true;
+
+          if (Kiosko.datosListos) {
+            Kiosko.renderStatsLocal();
           }
         })
         .catch(function() {
-          // Si falla la red, se deja el overlay visible para reintentar a mano.
+          for (var m = 0; m < lote.length; m++) {
+            lote[m].intentos = (lote[m].intentos || 0) + 1;
+          }
+
+          Kiosko.reintentoMs = Math.min(Kiosko.reintentoMs * 2, 30000);
+        })
+        .then(function() {
+          Kiosko.enviando = false;
+          Kiosko.guardarPendientes();
+          Kiosko.actualizarPendientesUI();
+
+          if (Kiosko.pendientes.length > 0) {
+            setTimeout(Kiosko.procesarCola, huboExito ? 300 : Kiosko.reintentoMs);
+          }
         });
     };
 
@@ -1331,7 +1794,7 @@
     Kiosko.onScanExito = function(decodedText) {
       /*
        * El flag impide que se procesen dos lecturas distintas mientras
-       * todavía se está esperando la respuesta del servidor.
+       * todavía se está mostrando el resultado anterior.
        */
       if (Kiosko.procesando) {
         return;
@@ -1395,6 +1858,19 @@
         } catch (error) {}
       }
 
+      /*
+       * Camino rápido: el estudiante está en los datos locales, se decide
+       * al instante y el registro se envía en segundo plano.
+       */
+      if (Kiosko.datosListos && Kiosko.estudiantes[cedula]) {
+        Kiosko.registrarLocal(cedula);
+        return;
+      }
+
+      /*
+       * Camino lento (estudiante que no está en los datos locales, p. ej.
+       * agregado hoy, o kiosko sin datos): se consulta al servidor.
+       */
       Kiosko.setEstado('Registrando…', 'procesando');
       document.getElementById('scanMsg').textContent =
         'Registrando estudiante…';
@@ -1407,7 +1883,21 @@
         MODO_ACTUAL
       ])
         .then(function(respuesta) {
+          if (Kiosko.datosListos && respuesta && respuesta.ok && respuesta.data) {
+            var d = respuesta.data;
+            var turno = d.servicio === 'Transporte'
+              ? (d.turno === 'tarde' ? 'T' : 'M')
+              : '';
+
+            Kiosko.estudiantes[cedula] = [d.nombre, d.seccion, d.nivel, d.tipo];
+            Kiosko.registrados[turno ? cedula + '|' + turno : cedula] = d.hora;
+          }
+
           Kiosko.mostrarResultado(respuesta);
+
+          if (Kiosko.datosListos) {
+            Kiosko.renderStatsLocal();
+          }
         })
         .catch(function(error) {
           var esTimeout =
@@ -1427,7 +1917,7 @@
           // Si fue timeout, el backend probablemente registró igual.
           // Refrescar el panel 6 segundos después para mostrar el estado real.
           if (esTimeout) {
-            setTimeout(Kiosko.refrescarStats, 6000);
+            setTimeout(Kiosko.refrescar, 6000);
           }
         });
     };
@@ -1624,7 +2114,7 @@
     };
 
     // ============================================================
-    // ESTADÍSTICAS
+    // ESTADÍSTICAS (modo sin datos locales)
     // ============================================================
 
     Kiosko.refrescarStats = function() {
@@ -1733,6 +2223,34 @@
         });
     };
 
+    /*
+     * Modo anterior: una petición por escaneo y estadísticas por polling.
+     * Solo se usa si el backend no devolvió datos locales.
+     */
+    Kiosko.iniciarModoServidor = function() {
+      Kiosko.api('comedorStats', [null])
+        .then(function(respuesta) {
+          if (respuesta && respuesta.ok && respuesta.data) {
+            document.getElementById('kStatTotal').textContent =
+              respuesta.data.total || 0;
+            document.getElementById('kStatBeca').textContent =
+              respuesta.data.becados || 0;
+            document.getElementById('kStatTiq').textContent =
+              respuesta.data.tiquetes || 0;
+          }
+        })
+        .catch(function() {})
+        .then(function() {
+          Kiosko.habilitarBotonIniciar();
+          Kiosko.setEstado('Activo');
+        });
+
+      Kiosko.statsTimer = setInterval(
+        Kiosko.refrescarStats,
+        INTERVALO_STATS
+      );
+    };
+
     // ============================================================
     // AUDIO Y VIBRACIÓN
     // ============================================================
@@ -1825,8 +2343,6 @@
       }
     })();
 
-    Kiosko.iniciarValidacionOperador();
-
     Kiosko.habilitarBotonIniciar = function() {
       var btn = document.getElementById('btnIniciar');
       if (btn) {
@@ -1835,40 +2351,15 @@
       }
     };
 
-    /*
-     * Solo consultar si se configuró una URL real.
-     */
     if (
       BACKEND_URL &&
       BACKEND_URL.indexOf('PEGA_AQUI') === -1
     ) {
-      /*
-       * Primera llamada al backend: calienta el script.
-       * El botón "Iniciar" se habilita cuando responde (o si falla),
-       * así el primer escaneo nunca toca cold start.
-       */
-      Kiosko.api('comedorStats', [null])
-        .then(function(respuesta) {
-          if (respuesta && respuesta.ok && respuesta.data) {
-            document.getElementById('kStatTotal').textContent =
-              respuesta.data.total || 0;
-            document.getElementById('kStatBeca').textContent =
-              respuesta.data.becados || 0;
-            document.getElementById('kStatTiq').textContent =
-              respuesta.data.tiquetes || 0;
-          }
-        })
-        .catch(function() {})
-        .then(function() {
-          // Se ejecuta siempre (éxito o error): script ya arrancó.
-          Kiosko.habilitarBotonIniciar();
-          Kiosko.setEstado('Activo');
-        });
+      Kiosko.prepararOperador();
 
-      Kiosko.statsTimer = setInterval(
-        Kiosko.refrescarStats,
-        INTERVALO_STATS
-      );
+      // Reenvía lo que haya quedado pendiente de una sesión anterior.
+      Kiosko.cargarPendientes();
+      Kiosko.procesarCola();
     } else {
       Kiosko.setEstado(
         'Backend no configurado',
