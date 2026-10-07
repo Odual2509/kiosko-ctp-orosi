@@ -2041,9 +2041,11 @@
       var cedula = Kiosko.normalizarCedula(decodedText);
 
       /*
-       * El QR de los carnés debe contener solo una cédula de 9 dígitos.
+       * El QR del carné trae la identificación: cédula nacional (9 dígitos)
+       * o DIMEX / identificación de extranjero (hasta 12). Igual que el
+       * servidor (validarCedula).
        */
-      if (!/^\d{9}$/.test(cedula)) {
+      if (!/^\d{9,12}$/.test(cedula)) {
         if (
           cedula === Kiosko.ultimaCedula &&
           ahora - Kiosko.ultimaCedulaTime < ANTI_REBOTE
