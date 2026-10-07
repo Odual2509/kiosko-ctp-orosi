@@ -1198,6 +1198,114 @@
      * que llegue al kiosko tiene que identificarse. Al validar, el servidor
      * devuelve también los datos para decidir localmente cada escaneo.
      */
+    // ------------------------------------------------------------
+    // Ingreso rápido: operadores ya validados en esta tablet
+    // ------------------------------------------------------------
+    /*
+     * Apps Script tarda 3-5 s (o más con wifi lento) en responder
+     * CUALQUIER petición, aunque el trabajo del servidor sea de 0,2 s.
+     * Para no esperar eso en cada ingreso, la tablet guarda:
+     *  - una huella (hash) de cada operador que el servidor ya aprobó
+     *    (nunca la cédula), con su modo y ruta;
+     *  - la última lista de estudiantes descargada por modo.
+     * Si la cédula ingresada coincide con una huella conocida, el kiosko
+     * entra al instante y confirma con el servidor en segundo plano: si
+     * el servidor dice que ya no está autorizada, se bloquea de nuevo.
+     */
+    var OPERADORES_CONOCIDOS_KEY = 'kiosko_operadores_v1';
+    var DATOS_CACHE_KEY = 'kiosko_datos_v1';
+    var OPERADOR_CONOCIDO_DIAS = 45;
+
+    // Igual que el servidor: 7 dígitos (3-283-146) → 9 (302830146).
+    Kiosko.completarCedula = function(c) {
+      return /^\d{7}$/.test(c) ? c.charAt(0) + '0' + c.substring(1, 4) + '0' + c.substring(4) : c;
+    };
+
+    Kiosko.leerJSON = function(clave) {
+      try { return JSON.parse(localStorage.getItem(clave) || 'null') || {}; } catch (e) { return {}; }
+    };
+
+    Kiosko.guardarJSON = function(clave, valor) {
+      try { localStorage.setItem(clave, JSON.stringify(valor)); } catch (e) {}
+    };
+
+    Kiosko.operadorConocido = function(cedula) {
+      var conocidos = Kiosko.leerJSON(OPERADORES_CONOCIDOS_KEY);
+      var o = conocidos[Kiosko.hashOperador(Kiosko.completarCedula(cedula))];
+      if (!o || !o.modo) return null;
+      if (Date.now() - (o.ts || 0) > OPERADOR_CONOCIDO_DIAS * 86400000) return null;
+      return o;
+    };
+
+    // Guarda la aprobación del servidor y la lista de estudiantes de ese modo.
+    Kiosko.recordarSesion = function(cedula, d) {
+      var conocidos = Kiosko.leerJSON(OPERADORES_CONOCIDOS_KEY);
+      conocidos[Kiosko.hashOperador(Kiosko.completarCedula(cedula))] = {
+        modo: d.modo, ruta: d.ruta || null, ts: Date.now()
+      };
+      Kiosko.guardarJSON(OPERADORES_CONOCIDOS_KEY, conocidos);
+
+      if (d.estudiantes) {
+        var datos = Kiosko.leerJSON(DATOS_CACHE_KEY);
+        datos[d.modo] = {
+          fecha: d.fecha, estudiantes: d.estudiantes, rutas: d.rutas || {}, horaCorte: d.horaCorte
+        };
+        Kiosko.guardarJSON(DATOS_CACHE_KEY, datos);
+      }
+    };
+
+    Kiosko.olvidarOperador = function(cedula) {
+      var conocidos = Kiosko.leerJSON(OPERADORES_CONOCIDOS_KEY);
+      delete conocidos[Kiosko.hashOperador(Kiosko.completarCedula(cedula))];
+      Kiosko.guardarJSON(OPERADORES_CONOCIDOS_KEY, conocidos);
+    };
+
+    /** Entra al instante con los datos guardados y confirma en segundo plano. */
+    Kiosko.ingresoRapido = function(cedula, conocido, cache) {
+      Kiosko.operador = cedula;
+      Kiosko.aplicarModoOperador(conocido.modo);
+      Kiosko.cargarDatos({
+        modo: conocido.modo,
+        fecha: Kiosko.ahoraServidor().fecha,   // los registros del día llegan del servidor
+        horaCorte: cache.horaCorte,
+        estudiantes: cache.estudiantes,
+        rutas: cache.rutas,
+        ruta: conocido.ruta,
+        registrados: {}
+      });
+      Kiosko.ocultarOperadorOverlay();
+      Kiosko.iniciarSesionLista();
+      Kiosko.setEstado('Actualizando datos…', 'procesando');
+
+      Kiosko.apiConReintento('kioskoIniciarSesion', [cedula], TIMEOUT_FONDO, 2)
+        .then(function(respuesta) {
+          if (respuesta && respuesta.ok && respuesta.data && respuesta.data.modo) {
+            if (respuesta.data.modo !== conocido.modo) {
+              // Le cambiaron el modo (Comedor ↔ Transporte): volver a entrar.
+              Kiosko.olvidarOperador(cedula);
+              alert('Su cédula ahora está habilitada para ' + respuesta.data.modo + '. Ingrese de nuevo.');
+              location.reload();
+              return;
+            }
+            Kiosko.recordarSesion(cedula, respuesta.data);
+            Kiosko.cargarDatos(respuesta.data);
+            Kiosko.renderStatsLocal();
+            Kiosko.renderUltimosLocal();
+            Kiosko.setEstado('Activo');
+            return;
+          }
+          // El servidor respondió que no: se revoca el acceso guardado.
+          Kiosko.olvidarOperador(cedula);
+          alert((respuesta && respuesta.mensaje) || 'Cédula no autorizada.');
+          location.reload();
+        })
+        .catch(function() {
+          // Sin conexión: se sigue con los datos guardados; los escaneos
+          // quedan en cola y se envían cuando vuelva el internet.
+          Kiosko.setEstado('Sin conexión · usando datos guardados', 'error');
+        });
+    };
+
     Kiosko.validarOperador = function() {
       var input = document.getElementById('operadorCedula');
       var errorEl = document.getElementById('operadorError');
@@ -1215,14 +1323,23 @@
         return;
       }
 
-      if (boton) {
-        boton.disabled = true;
-        boton.textContent = 'Verificando…';
+      // Operador ya aprobado en esta tablet y lista de estudiantes guardada: al instante.
+      var conocido = Kiosko.operadorConocido(cedula);
+      var cache = conocido ? Kiosko.leerJSON(DATOS_CACHE_KEY)[conocido.modo] : null;
+      if (conocido && cache && cache.estudiantes) {
+        if (input) input.value = '';
+        Kiosko.ingresoRapido(cedula, conocido, cache);
+        return;
       }
 
-      Kiosko.apiConReintento('kioskoIniciarSesion', [cedula], TIMEOUT_FONDO, 1, function() {
+      if (boton) {
+        boton.disabled = true;
+        boton.textContent = 'Verificando… (la primera vez puede tardar)';
+      }
+
+      Kiosko.apiConReintento('kioskoIniciarSesion', [cedula], TIMEOUT_FONDO, 2, function() {
         if (boton) {
-          boton.textContent = 'Servidor lento, reintentando…';
+          boton.textContent = 'Sin respuesta todavía, reintentando…';
         }
       })
         .then(function(respuesta) {
@@ -1233,6 +1350,7 @@
               input.value = '';
             }
 
+            Kiosko.recordarSesion(cedula, respuesta.data);
             Kiosko.aplicarModoOperador(respuesta.data.modo);
             Kiosko.cargarDatos(respuesta.data);
             Kiosko.ocultarOperadorOverlay();
